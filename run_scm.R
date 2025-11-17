@@ -412,10 +412,13 @@ cat(sprintf("Control units: %d-%d (%d donors)\n",
 
 # Build predictors list for dataprep
 # Average predictors over pre-period
-predictors_ops <- list()
+predictors_list <- c()
+predictors_ops_list <- c()
+
 for (i in seq_along(config$predictors_wdi_codes)) {
   pred_name <- sprintf("predictor_%d", i)
-  predictors_ops[[pred_name]] <- "mean"
+  predictors_list <- c(predictors_list, pred_name)
+  predictors_ops_list <- c(predictors_ops_list, "mean")
 }
 
 # Special predictors (outcome at specific years)
@@ -429,7 +432,7 @@ for (year in config$special_predictor_years) {
 }
 
 cat(sprintf("Using %d averaged predictors and %d special predictors (TFR at specific years)\n",
-            length(predictors_ops), length(special_predictors)))
+            length(predictors_list), length(special_predictors)))
 
 # ==============================================================================
 # SECTION 8: FIT SYNTHETIC CONTROL MODEL
@@ -441,8 +444,8 @@ cat("\nFitting Synthetic Control Model...\n")
 tryCatch({
   dataprep_out <- dataprep(
     foo = as.data.frame(panel_data),
-    predictors = names(predictors_ops),
-    predictors.op = unlist(predictors_ops),
+    predictors = predictors_list,
+    predictors.op = predictors_ops_list,
     dependent = "outcome",
     unit.variable = "unit_id",
     time.variable = "year",
