@@ -5,10 +5,35 @@
 # Date: 2025-11-17
 # Reproducibility Seed: 20231108
 ################################################################################
+#
+# IMPORTANT: This script should be run from the command line using:
+#   Rscript run_scm.R
+#
+# Do NOT source this file in an interactive R session, as it may hang during
+# data download. If you must run interactively, run sections manually.
+#
+################################################################################
 
 # ==============================================================================
 # SECTION 1: SETUP AND CONFIGURATION
 # ==============================================================================
+
+# Check if running interactively and warn user
+if (interactive()) {
+  warning(
+    paste("\n\n*** WARNING: You are running this script interactively! ***\n",
+          "This script is designed to be run from command line with:\n",
+          "  Rscript run_scm.R\n",
+          "\nInteractive execution may cause issues with:\n",
+          "  - WDI data download (may hang or timeout)\n",
+          "  - Package installation prompts\n",
+          "  - Progress reporting\n",
+          "\nIf you experience problems, exit R and run from command line.\n",
+          "Continuing in 5 seconds...\n\n"),
+    immediate. = TRUE
+  )
+  Sys.sleep(5)
+}
 
 # Set reproducibility seed
 set.seed(20231108)
@@ -151,21 +176,37 @@ cat("-------------------------------\n\n")
 # ==============================================================================
 
 cat("Downloading data from World Bank WDI...\n")
+cat("This may take 30-60 seconds depending on your internet connection...\n")
 
 # All indicators to download
 all_indicators <- c(config$outcome_wdi_code, config$predictors_wdi_codes)
 
-# Download data
+# Download data with better error handling
 tryCatch({
-  wdi_data <- WDI(
+  wdi_data <- WDI::WDI(
     indicator = all_indicators,
     start = config$pre_period[1],
     end = config$post_period_end,
     extra = TRUE
   )
-  cat(sprintf("Downloaded %d rows of data.\n", nrow(wdi_data)))
+  
+  if (is.null(wdi_data) || nrow(wdi_data) == 0) {
+    stop("WDI returned no data. Please check your internet connection and try again.")
+  }
+  
+  cat(sprintf("Successfully downloaded %d rows of data.\n", nrow(wdi_data)))
 }, error = function(e) {
-  stop(sprintf("Failed to download WDI data: %s\n", e$message))
+  stop(sprintf(
+    paste("\n\nERROR: Failed to download WDI data.\n",
+          "Message: %s\n",
+          "\nPossible solutions:\n",
+          "1. Check your internet connection\n",
+          "2. Try again in a few minutes (World Bank API may be temporarily unavailable)\n",
+          "3. Check if the World Bank API is accessible: https://api.worldbank.org/v2/country\n",
+          "4. Verify indicator codes are correct\n",
+          "5. Try with a smaller time range (e.g., --pre_period=1970,1979)\n"),
+    e$message
+  ))
 })
 
 # Filter out aggregates
