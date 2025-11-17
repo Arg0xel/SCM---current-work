@@ -262,6 +262,25 @@ Only includes placebos with pre-RMSPE ≤ 2× China's.
 
 ## 🐛 Troubleshooting
 
+> **📘 For comprehensive troubleshooting, see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)**
+
+### ⚠️ CRITICAL: How to Run the Script
+
+**✅ CORRECT (Command Line):**
+```bash
+Rscript run_scm.R
+```
+
+**❌ INCORRECT (Interactive R Session):**
+```r
+# DO NOT run by copying into R console or using source()!
+# This will cause WDI download to hang.
+```
+
+The script is designed for batch execution. Run it from the terminal/command prompt, not in an interactive R session.
+
+---
+
 ### Error: "China has insufficient outcome coverage"
 
 **Problem**: Too much missing TFR data for China in pre-period.

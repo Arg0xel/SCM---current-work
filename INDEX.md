@@ -163,31 +163,30 @@ Testing, diagnostics, and quality assurance guide.
 
 28 ready-to-use command examples covering common scenarios.
 
-**Categories**:
-- Basic examples (2)
-- Time period adjustments (4)
-- Donor pool restrictions (6)
-- Data quality settings (3)
-- Placebo configuration (4)
-- Combined use cases (4)
-- Batch processing (1)
+---
 
-**Example commands**:
-```bash
-# Regional restriction
-Rscript run_scm.R \
-  --donor_include_regions="East Asia & Pacific,Latin America & Caribbean"
+#### `TROUBLESHOOTING.md`
+**Size**: 10 KB | **Type**: Markdown | **Audience**: All users
 
-# Income-matched donors
-Rscript run_scm.R \
-  --donor_include_income_groups="Upper middle income,High income"
+Comprehensive troubleshooting guide for common issues.
 
-# Custom donor pool
-Rscript run_scm.R \
-  --donor_include_iso3="KOR,THA,MYS,IDN,PHL,MEX,BRA,TUR"
+**Contents**:
+- **Critical**: Correct vs incorrect execution methods
+- WDI download hangs and timeouts
+- Package installation issues
+- Interactive session warnings
+- Memory and performance problems
+- Platform-specific issues (macOS/Windows/Linux)
+- Debugging steps
+- Quick reference table
+
+**Most Critical Issue**:
+```
+❌ WRONG: source("run_scm.R") in R console
+✅ RIGHT: Rscript run_scm.R from terminal
 ```
 
-**Best for**: Copy-paste commands for immediate use.
+**Best for**: Fixing problems when they occur, understanding error messages.
 
 ---
 

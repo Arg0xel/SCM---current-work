@@ -4,6 +4,8 @@ Get up and running with the Synthetic Control analysis in **5 minutes**.
 
 ## ⚡ Lightning Start
 
+> **⚠️ IMPORTANT**: Run this from your **terminal/command prompt**, NOT in an interactive R session!
+
 ```bash
 # 1. Ensure R is installed (version 4.0+)
 R --version
@@ -14,6 +16,9 @@ Rscript run_scm.R
 # 3. View results
 ls scm_results/
 ```
+
+**❌ Don't do this**: Opening R and typing `source("run_scm.R")` - this will hang!  
+**✅ Do this**: Run `Rscript run_scm.R` from terminal
 
 That's it! The script will:
 - Download World Bank data automatically ✓
