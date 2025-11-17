@@ -1,0 +1,118 @@
+# ============================================================================
+# Synthetic Control Analysis Configuration File
+# ============================================================================
+# This file allows you to customize the analysis parameters.
+# Uncomment and modify any parameter to override the defaults.
+# Leave commented to use built-in defaults from run_scm.R
+
+# --- Treatment Specification ---
+treatment_country_iso3: "CHN"
+treatment_year: 1980
+# pre_period: [1960, 1979]
+# post_period_end: 2015
+
+# If you want to exclude the 2015 policy change, set this to TRUE
+# This will automatically set post_period_end to 2014
+# end_year_exclude_2015_policy_change: FALSE
+
+# --- Outcome and Predictors ---
+# outcome_wdi_code: "SP.DYN.TFRT.IN"
+# predictors_wdi_codes:
+#   - "NY.GDP.PCAP.KD"      # GDP per capita (constant)
+#   - "SP.DYN.LE00.IN"      # Life expectancy
+#   - "SP.URB.TOTL.IN.ZS"   # Urbanization rate
+
+# Years at which to match outcome specifically (must be in pre-period)
+# special_predictor_years: [1965, 1970, 1975, 1979]
+
+# --- Data Quality ---
+# Minimum proportion of non-missing outcome data required in pre-period
+# min_pre_coverage: 0.8
+
+# Whether to interpolate small gaps in data
+# interpolate_small_gaps: TRUE
+# max_gap_to_interpolate: 3
+
+# --- Donor Pool Configuration ---
+# OPTION 1: Explicit whitelist (if specified, only these countries are used)
+# donor_include_iso3:
+#   - KOR
+#   - THA
+#   - MYS
+#   - IDN
+#   - PHL
+#   - MEX
+#   - BRA
+#   - TUR
+#   - CHL
+#   - COL
+
+# OPTION 2: Exclusion list (these countries will be removed)
+donor_exclude_iso3:
+  - TWN
+  - HKG
+  - MAC
+#   - SGP  # Uncomment to also exclude Singapore
+
+# OPTION 3: Include only certain regions
+# donor_include_regions:
+#   - "East Asia & Pacific"
+#   - "Latin America & Caribbean"
+
+# OPTION 4: Include only certain income groups
+# donor_include_income_groups:
+#   - "Upper middle income"
+#   - "High income"
+
+# OPTION 5: Exclude certain regions
+# donor_exclude_regions:
+#   - "Sub-Saharan Africa"
+
+# Whether to remove very small countries (microstates)
+# remove_microstates_by_name: TRUE
+
+# --- Placebo Test Configuration ---
+# Maximum number of placebos to run (NULL = all donors)
+# placebo_max_n: NULL
+
+# Filter for excluding poorly-fitted placebos from p-value calculation
+# Options: "quantile", "relative", "none"
+# placebo_prefit_filter: "quantile"
+
+# If "quantile": exclude top X proportion (e.g., 0.9 = exclude worst 10%)
+# If "relative": exclude placebos with pre-RMSPE > X * China's pre-RMSPE
+# placebo_prefit_filter_value: 0.9
+
+# --- In-Time Placebo (optional robustness check) ---
+# Pretend treatment happened earlier; should show no effect
+# in_time_placebo_year: 1970
+
+# --- Output ---
+# output_dir: "scm_results"
+
+# ============================================================================
+# EXAMPLES OF ALTERNATIVE CONFIGURATIONS
+# ============================================================================
+
+# Example 1: Restrict to East/Southeast Asia + Latin America
+# donor_include_regions:
+#   - "East Asia & Pacific"
+#   - "Latin America & Caribbean"
+
+# Example 2: Use only upper-middle and high-income countries
+# donor_include_income_groups:
+#   - "Upper middle income"
+#   - "High income"
+
+# Example 3: Manually curated donor pool
+# donor_include_iso3: [KOR, THA, MYS, IDN, PHL, MEX, BRA, TUR, CHL, COL, IRN, EGY]
+
+# Example 4: Shorter pre-period if early data is sparse
+# pre_period: [1965, 1979]
+
+# Example 5: End before 2015 policy change
+# end_year_exclude_2015_policy_change: TRUE
+
+# Example 6: More stringent placebo filter
+# placebo_prefit_filter: "relative"
+# placebo_prefit_filter_value: 2.0
