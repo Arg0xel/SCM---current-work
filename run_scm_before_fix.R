@@ -284,90 +284,36 @@ if (china_coverage < config$min_pre_coverage) {
 
 cat("\nConstructing donor pool...\n")
 
-# Create output directory for logs
-if (!dir.exists(config$output_dir)) {
-  dir.create(config$output_dir, recursive = TRUE)
-}
-
-# Initialize donor filter log
-log_file <- file.path(config$output_dir, "donor_filter_log.txt")
-log_conn <- file(log_file, open = "wt")
-
-# Helper function to write to both console and log file
-log_both <- function(msg, console = TRUE, file_only = FALSE) {
-  if (!file_only) {
-    if (console) cat(msg)
-  }
-  cat(msg, file = log_conn)
-}
-
-# Log header
-log_both(sprintf("================================================================================\n"))
-log_both(sprintf("DONOR POOL FILTERING LOG\n"))
-log_both(sprintf("================================================================================\n"))
-log_both(sprintf("Analysis Date: %s\n", Sys.time()))
-log_both(sprintf("Treatment Country: %s (%s)\n", config$treatment_country_iso3, 
-                countrycode::countrycode(config$treatment_country_iso3, "iso3c", "country.name")))
-log_both(sprintf("Treatment Year: %d\n", config$treatment_year))
-log_both(sprintf("Pre-period: %d-%d\n", config$pre_period[1], config$pre_period[2]))
-log_both(sprintf("================================================================================\n\n"))
-
 # Start with all countries except treatment
 donor_pool <- wdi_data %>%
   filter(iso3c != config$treatment_country_iso3) %>%
   pull(iso3c) %>%
   unique()
 
-log_both(sprintf("STEP 0: INITIAL POOL (all countries except treatment)\n"))
-log_both(sprintf("  Count: %d countries\n", length(donor_pool)))
-log_both(sprintf("  Excluded: %s\n", config$treatment_country_iso3))
-log_both(sprintf("  Examples: %s\n", paste(head(sort(donor_pool), 10), collapse = ", ")))
-log_both(sprintf("\n"))
+cat(sprintf("Initial pool: %d countries (excluding %s)\n", 
+            length(donor_pool), config$treatment_country_iso3))
 
 # Apply filters
 # 1. Exclude microstates
 if (config$remove_microstates_by_name) {
   before <- length(donor_pool)
-  removed <- intersect(donor_pool, microstates)
   donor_pool <- setdiff(donor_pool, microstates)
-  
-  log_both(sprintf("STEP 1: REMOVE MICROSTATES\n"))
-  log_both(sprintf("  Count before: %d\n", before))
-  log_both(sprintf("  Count after: %d\n", length(donor_pool)))
-  log_both(sprintf("  Removed: %d (%s)\n", length(removed), paste(head(removed, 10), collapse = ", ")))
-  if (length(removed) > 10) {
-    log_both(sprintf("           ... and %d more\n", length(removed) - 10))
-  }
-  log_both(sprintf("  Remaining examples: %s\n", paste(head(sort(donor_pool), 10), collapse = ", ")))
-  log_both(sprintf("\n"))
+  cat(sprintf("After removing microstates: %d countries (-%d)\n",
+              length(donor_pool), before - length(donor_pool)))
 }
 
 # 2. Apply explicit exclusion list
 if (length(config$donor_exclude_iso3) > 0) {
   before <- length(donor_pool)
-  removed <- intersect(donor_pool, config$donor_exclude_iso3)
   donor_pool <- setdiff(donor_pool, config$donor_exclude_iso3)
-  
-  log_both(sprintf("STEP 2: EXPLICIT EXCLUSION LIST\n"))
-  log_both(sprintf("  Count before: %d\n", before))
-  log_both(sprintf("  Count after: %d\n", length(donor_pool)))
-  log_both(sprintf("  Exclusion list: %s\n", paste(config$donor_exclude_iso3, collapse = ", ")))
-  log_both(sprintf("  Actually removed: %s\n", paste(removed, collapse = ", ")))
-  log_both(sprintf("  Remaining examples: %s\n", paste(head(sort(donor_pool), 10), collapse = ", ")))
-  log_both(sprintf("\n"))
+  cat(sprintf("After explicit exclusions: %d countries (-%d)\n",
+              length(donor_pool), before - length(donor_pool)))
 }
 
 # 3. Apply inclusion filters (if any)
 if (length(config$donor_include_iso3) > 0) {
-  before <- length(donor_pool)
   donor_pool <- intersect(donor_pool, config$donor_include_iso3)
-  
-  log_both(sprintf("STEP 3: ISO3 INCLUSION WHITELIST\n"))
-  log_both(sprintf("  Count before: %d\n", before))
-  log_both(sprintf("  Count after: %d\n", length(donor_pool)))
-  log_both(sprintf("  Whitelist: %s\n", paste(config$donor_include_iso3, collapse = ", ")))
-  log_both(sprintf("  Remaining: %s\n", paste(sort(donor_pool), collapse = ", ")))
-  log_both(sprintf("\n"))
+  cat(sprintf("After ISO3 whitelist: %d countries\n", length(donor_pool)))
 }
 
 # 4. Region filters
@@ -376,178 +322,53 @@ donor_meta <- wdi_data %>%
   distinct()
 
 if (length(config$donor_include_regions) > 0) {
-  before <- length(donor_pool)
   valid_donors <- donor_meta %>%
     filter(region %in% config$donor_include_regions) %>%
     pull(iso3c)
-  removed <- setdiff(donor_pool, valid_donors)
   donor_pool <- intersect(donor_pool, valid_donors)
-  
-  log_both(sprintf("STEP 4a: REGION INCLUSION FILTER\n"))
-  log_both(sprintf("  Count before: %d\n", before))
-  log_both(sprintf("  Count after: %d\n", length(donor_pool)))
-  log_both(sprintf("  Included regions: %s\n", paste(config$donor_include_regions, collapse = ", ")))
-  log_both(sprintf("  Removed: %d (%s)\n", length(removed), paste(head(removed, 10), collapse = ", ")))
-  if (length(removed) > 10) {
-    log_both(sprintf("           ... and %d more\n", length(removed) - 10))
-  }
-  log_both(sprintf("  Remaining examples: %s\n", paste(head(sort(donor_pool), 10), collapse = ", ")))
-  log_both(sprintf("\n"))
+  cat(sprintf("After region inclusion filter: %d countries\n", 
+              length(donor_pool)))
 }
 
 if (length(config$donor_exclude_regions) > 0) {
-  before <- length(donor_pool)
   invalid_donors <- donor_meta %>%
     filter(region %in% config$donor_exclude_regions) %>%
     pull(iso3c)
-  removed <- intersect(donor_pool, invalid_donors)
   donor_pool <- setdiff(donor_pool, invalid_donors)
-  
-  log_both(sprintf("STEP 4b: REGION EXCLUSION FILTER\n"))
-  log_both(sprintf("  Count before: %d\n", before))
-  log_both(sprintf("  Count after: %d\n", length(donor_pool)))
-  log_both(sprintf("  Excluded regions: %s\n", paste(config$donor_exclude_regions, collapse = ", ")))
-  log_both(sprintf("  Actually removed: %s\n", paste(removed, collapse = ", ")))
-  log_both(sprintf("  Remaining examples: %s\n", paste(head(sort(donor_pool), 10), collapse = ", ")))
-  log_both(sprintf("\n"))
+  cat(sprintf("After region exclusion filter: %d countries\n", 
+              length(donor_pool)))
 }
 
 # 5. Income filters
 if (length(config$donor_include_income_groups) > 0) {
-  before <- length(donor_pool)
   valid_donors <- donor_meta %>%
     filter(income %in% config$donor_include_income_groups) %>%
     pull(iso3c)
-  removed <- setdiff(donor_pool, valid_donors)
   donor_pool <- intersect(donor_pool, valid_donors)
-  
-  log_both(sprintf("STEP 5: INCOME GROUP FILTER\n"))
-  log_both(sprintf("  Count before: %d\n", before))
-  log_both(sprintf("  Count after: %d\n", length(donor_pool)))
-  log_both(sprintf("  Included income groups: %s\n", paste(config$donor_include_income_groups, collapse = ", ")))
-  log_both(sprintf("  Removed: %d (%s)\n", length(removed), paste(head(removed, 10), collapse = ", ")))
-  if (length(removed) > 10) {
-    log_both(sprintf("           ... and %d more\n", length(removed) - 10))
-  }
-  log_both(sprintf("  Remaining examples: %s\n", paste(head(sort(donor_pool), 10), collapse = ", ")))
-  log_both(sprintf("\n"))
+  cat(sprintf("After income filter: %d countries\n", length(donor_pool)))
 }
 
 # 6. Check minimum coverage for donor pool
-# Calculate coverage for outcome and ALL predictors
-donor_coverage_full <- wdi_data %>%
+donor_coverage <- wdi_data %>%
   filter(iso3c %in% donor_pool,
          year >= config$pre_period[1],
          year <= config$pre_period[2]) %>%
   group_by(iso3c) %>%
-  summarize(
-    outcome_coverage = mean(!is.na(outcome)),
-    predictor_1_coverage = mean(!is.na(predictor_1)),
-    predictor_2_coverage = mean(!is.na(predictor_2)),
-    predictor_3_coverage = mean(!is.na(predictor_3)),
-    .groups = "drop"
-  )
+  summarize(coverage = mean(!is.na(outcome)), .groups = "drop") %>%
+  filter(coverage >= config$min_pre_coverage)
 
-# Join with metadata for logging
-donor_coverage_full <- donor_coverage_full %>%
-  left_join(donor_meta, by = "iso3c")
-
-# RELAXED FILTER: Require outcome coverage + at least 2 of 3 predictors
-# This prevents over-filtering which was causing only 2 donors to remain
-donor_coverage <- donor_coverage_full %>%
-  mutate(
-    n_predictors_ok = (predictor_1_coverage >= config$min_pre_coverage) +
-                     (predictor_2_coverage >= config$min_pre_coverage) +
-                     (predictor_3_coverage >= config$min_pre_coverage)
-  ) %>%
-  filter(
-    outcome_coverage >= config$min_pre_coverage,
-    n_predictors_ok >= 2  # At least 2 of 3 predictors must have good coverage
-  )
-
-# Log removed donors for diagnostics
-removed_donors <- donor_coverage_full %>%
-  filter(!(iso3c %in% donor_coverage$iso3c))
-
-before_coverage <- length(donor_pool)
 donor_pool <- intersect(donor_pool, donor_coverage$iso3c)
 
-log_both(sprintf("STEP 6: DATA COVERAGE FILTER (Pre-period %d-%d)\n", 
-                config$pre_period[1], config$pre_period[2]))
-log_both(sprintf("  Count before: %d\n", before_coverage))
-log_both(sprintf("  Count after: %d\n", length(donor_pool)))
-log_both(sprintf("  Removed: %d\n", before_coverage - length(donor_pool)))
-log_both(sprintf("  Outcome coverage requirement: >= %.0f%%\n", config$min_pre_coverage * 100))
-log_both(sprintf("  Predictor requirement: At least 2 of 3 predictors with >= %.0f%% coverage\n",
-                config$min_pre_coverage * 100))
-log_both(sprintf("  Remaining examples: %s\n", paste(head(sort(donor_pool), 10), collapse = ", ")))
-log_both(sprintf("\n"))
-
-if (nrow(removed_donors) > 0) {
-  log_both(sprintf("Detailed Coverage Report for Removed Donors:\n"), console = FALSE, file_only = TRUE)
-  log_both(sprintf("%-8s %-30s %-10s %-10s %-10s %-10s %-10s\n",
-                  "ISO3", "Country", "Outcome", "Pred1", "Pred2", "Pred3", "N_OK"), 
-          console = FALSE, file_only = TRUE)
-  log_both(sprintf("%s\n", paste(rep("-", 100), collapse = "")), console = FALSE, file_only = TRUE)
-  
-  removed_summary <- removed_donors %>%
-    mutate(
-      n_pred_ok = (predictor_1_coverage >= config$min_pre_coverage) +
-                 (predictor_2_coverage >= config$min_pre_coverage) +
-                 (predictor_3_coverage >= config$min_pre_coverage),
-      reason = case_when(
-        outcome_coverage < config$min_pre_coverage ~ "Outcome",
-        n_pred_ok < 2 ~ sprintf("Predictors (%d/3)", n_pred_ok),
-        TRUE ~ "Unknown"
-      )
-    ) %>%
-    arrange(desc(outcome_coverage), desc(n_pred_ok))
-  
-  for (i in 1:min(30, nrow(removed_summary))) {
-    row <- removed_summary[i, ]
-    log_both(sprintf("%-8s %-30s %6.1f%% %9.1f%% %9.1f%% %9.1f%% %4d/3 [%s]\n",
-                    row$iso3c,
-                    substr(row$country, 1, 30),
-                    row$outcome_coverage * 100,
-                    row$predictor_1_coverage * 100,
-                    row$predictor_2_coverage * 100,
-                    row$predictor_3_coverage * 100,
-                    row$n_pred_ok,
-                    row$reason),
-            console = FALSE, file_only = TRUE)
-  }
-  
-  if (nrow(removed_summary) > 30) {
-    log_both(sprintf("... and %d more (see full table above)\n", nrow(removed_summary) - 30),
-            console = FALSE, file_only = TRUE)
-  }
-  log_both(sprintf("\n"), console = FALSE, file_only = TRUE)
-  
-  # Also print abbreviated version to console
-  cat("\nDonors removed due to insufficient coverage:\n")
-  removed_console <- removed_summary %>%
-    select(iso3c, country, reason, outcome_coverage, 
-           predictor_1_coverage, predictor_2_coverage, predictor_3_coverage)
-  print(head(removed_console, 20))
-  cat(sprintf("... and %d more (see donor_filter_log.txt for full details)\n", 
-              max(0, nrow(removed_console) - 20)))
-}
-
-cat(sprintf("\nAfter coverage filter: %d countries (-%d removed)\n",
-            length(donor_pool), before_coverage - length(donor_pool)))
-cat(sprintf("  Outcome coverage requirement: %.0f%%\n", config$min_pre_coverage * 100))
-cat(sprintf("  Predictor requirement: At least 2 of 3 predictors with %.0f%% coverage\n",
-            config$min_pre_coverage * 100))
+cat(sprintf("Final donor pool after coverage filter: %d countries\n", 
+            length(donor_pool)))
 
 if (length(donor_pool) < 5) {
-  warning_msg <- sprintf(
+  warning(sprintf(
     paste("Very small donor pool (%d countries). Consider:",
           "(1) relaxing filters, (2) reducing min_pre_coverage,",
           "(3) enabling interpolation, or (4) shortening pre-period."),
     length(donor_pool)
-  )
-  warning(warning_msg)
-  log_both(sprintf("\nWARNING: %s\n\n", warning_msg))
+  ))
 }
 
 # Print donor pool
@@ -556,54 +377,8 @@ donor_names <- donor_meta %>%
   arrange(country) %>%
   select(iso3c, country, region, income)
 
-log_both(sprintf("================================================================================\n"))
-log_both(sprintf("FINAL DONOR POOL: %d countries\n", length(donor_pool)))
-log_both(sprintf("================================================================================\n"))
-log_both(sprintf("%-8s %-30s %-30s %-20s\n", "ISO3", "Country", "Region", "Income"))
-log_both(sprintf("%s\n", paste(rep("-", 100), collapse = "")))
-
-for (i in 1:nrow(donor_names)) {
-  row <- donor_names[i, ]
-  log_both(sprintf("%-8s %-30s %-30s %-20s\n",
-                  row$iso3c,
-                  substr(row$country, 1, 30),
-                  substr(row$region, 1, 30),
-                  substr(row$income, 1, 20)))
-}
-
-log_both(sprintf("================================================================================\n\n"))
-
-# Close log file
-close(log_conn)
-
 cat("\nDonor pool countries:\n")
 print(donor_names, n = Inf)
-cat(sprintf("\nDonor filter log saved to: %s\n", log_file))
-
-# Defensive check: fail gracefully if donor pool is too small
-if (length(donor_pool) < 10) {
-  stop(sprintf(
-    paste("\n\nERROR: Donor pool has only %d countries (minimum 10 recommended).\n",
-          "\nThis is likely caused by overly restrictive filtering.\n",
-          "\nSuggested fixes (try in order):\n",
-          "1. Reduce min_pre_coverage (current: %.0f%%):\n",
-          "   Rscript run_scm.R --min_pre_coverage=0.7\n",
-          "   Rscript run_scm.R --min_pre_coverage=0.6\n",
-          "\n2. Enable interpolation (current: %s):\n",
-          "   Rscript run_scm.R --interpolate_small_gaps=TRUE --max_gap_to_interpolate=5\n",
-          "\n3. Shorten pre-period (current: %d-%d):\n",
-          "   Rscript run_scm.R --pre_period=1965,1979\n",
-          "   Rscript run_scm.R --pre_period=1970,1979\n",
-          "\n4. Remove region/income filters if applied\n",
-          "\n5. Check donor_filter_log.txt for details on which filters removed countries\n",
-          "\nFor more information, see the donor filter log at:\n  %s\n"),
-    length(donor_pool),
-    config$min_pre_coverage * 100,
-    ifelse(config$interpolate_small_gaps, "enabled", "disabled"),
-    config$pre_period[1], config$pre_period[2],
-    log_file
-  ))
-}
 
 # ==============================================================================
 # SECTION 7: PREPARE DATA FOR SYNTH
@@ -637,15 +412,14 @@ cat(sprintf("Control units: %d-%d (%d donors)\n",
 
 # Build predictors list for dataprep
 # Average predictors over pre-period
-predictors_list <- character(0)
-predictors_ops <- character(0) # Store operations as character vector
+predictors_list <- c()
+predictors_ops_list <- c()
 
 for (i in seq_along(config$predictors_wdi_codes)) {
   pred_name <- sprintf("predictor_%d", i)
   predictors_list <- c(predictors_list, pred_name)
-  predictors_ops <- c(predictors_ops, "mean") # Add "mean" for each predictor
+  predictors_ops_list <- c(predictors_ops_list, "mean")
 }
-
 
 # Special predictors (outcome at specific years)
 special_predictors <- list()
@@ -659,8 +433,6 @@ for (year in config$special_predictor_years) {
 
 cat(sprintf("Using %d averaged predictors and %d special predictors (TFR at specific years)\n",
             length(predictors_list), length(special_predictors)))
-cat(sprintf("Predictors: %s\n", paste(predictors_list, collapse=", ")))
-cat(sprintf("Operations: %s\n", paste(predictors_ops, collapse=", ")))
 
 # ==============================================================================
 # SECTION 8: FIT SYNTHETIC CONTROL MODEL
@@ -673,7 +445,7 @@ tryCatch({
   dataprep_out <- dataprep(
     foo = as.data.frame(panel_data),
     predictors = predictors_list,
-    predictors.op = "mean",
+    predictors.op = predictors_ops_list,
     dependent = "outcome",
     unit.variable = "unit_id",
     time.variable = "year",
@@ -684,49 +456,11 @@ tryCatch({
     time.plot = config$pre_period[1]:config$post_period_end,
     special.predictors = special_predictors
   )
-
+  
   cat("Data prepared successfully.\n")
 }, error = function(e) {
   stop(sprintf("dataprep failed: %s\n", e$message))
 })
-
-# Check for NA in predictor matrices and log if donors were dropped
-actual_control_units <- as.integer(colnames(dataprep_out$Y0plot))
-expected_control_units <- control_unit_ids
-
-dropped_units <- setdiff(expected_control_units, actual_control_units)
-if (length(dropped_units) > 0) {
-  dropped_iso3 <- unit_map %>% filter(unit_id %in% dropped_units) %>% pull(iso3c)
-  dropped_countries <- donor_meta %>% filter(iso3c %in% dropped_iso3) %>% pull(country)
-  
-  warning(sprintf(
-    paste("IMPORTANT: dataprep silently dropped %d donors due to missing data!",
-          "Dropped: %s",
-          "This suggests coverage filter was not strict enough.",
-          "Consider: (1) increasing min_pre_coverage, (2) disabling interpolation,",
-          "or (3) inspecting specific countries for data gaps."),
-    length(dropped_units),
-    paste(sprintf("%s (%s)", dropped_countries, dropped_iso3), collapse = ", ")
-  ))
-  
-  # Log to file
-  log_file <- file.path(config$output_dir, "donor_filter_log.txt")
-  log_append <- file(log_file, open = "at")
-  cat(sprintf("\n================================================================================\n"), file = log_append)
-  cat(sprintf("DATAPREP NA REMOVAL (SILENT DROPS)\n"), file = log_append)
-  cat(sprintf("================================================================================\n"), file = log_append)
-  cat(sprintf("WARNING: dataprep() silently removed %d donors due to NA values in predictors\n", 
-              length(dropped_units)), file = log_append)
-  cat(sprintf("This indicates the coverage filter was not strict enough to catch all NA issues.\n\n"), 
-      file = log_append)
-  cat(sprintf("Dropped donors:\n"), file = log_append)
-  for (i in seq_along(dropped_iso3)) {
-    cat(sprintf("  - %s (%s)\n", dropped_countries[i], dropped_iso3[i]), file = log_append)
-  }
-  cat(sprintf("\nRecommendation: Increase min_pre_coverage or disable interpolation.\n"), file = log_append)
-  cat(sprintf("================================================================================\n\n"), file = log_append)
-  close(log_append)
-}
 
 # Check for NA in predictor matrices
 if (any(is.na(dataprep_out$X1)) || any(is.na(dataprep_out$X0))) {
@@ -790,7 +524,7 @@ cat(sprintf("Interpretation: China's TFR was on average %.4f %s than synthetic c
 # Extract and print donor weights
 weights_df <- data.frame(
   unit_id = control_unit_ids,
-  weight = as.vector(synth_out$solution.w)
+  weight = synth_out$solution.w
 ) %>%
   left_join(unit_map, by = "unit_id") %>%
   left_join(donor_meta, by = "iso3c") %>%
@@ -798,13 +532,9 @@ weights_df <- data.frame(
   arrange(desc(weight))
 
 cat("Donor weights (units with weight > 0.001):\n")
-if (nrow(weights_df) > 0) {
-  print(as.data.frame(weights_df %>% select(country, iso3c, weight, region, income)), row.names = FALSE)
-  cat(sprintf("\nTotal weight from %d donors: %.4f\n",
-              nrow(weights_df), sum(weights_df$weight, na.rm = TRUE)))
-} else {
-  cat("No donors with weight > 0.001\n")
-}
+print(weights_df %>% select(country, iso3c, weight, region, income), n = Inf)
+cat(sprintf("\nTotal weight from %d donors: %.4f\n", 
+            nrow(weights_df), sum(weights_df$weight)))
 
 # ==============================================================================
 # SECTION 10: PLACEBO-IN-SPACE TEST
@@ -840,8 +570,8 @@ for (placebo_iso3 in placebo_donors) {
   tryCatch({
     placebo_dataprep <- dataprep(
       foo = as.data.frame(panel_data),
-      predictors = predictors_list,
-      predictors.op = "mean",
+      predictors = names(predictors_ops),
+      predictors.op = unlist(predictors_ops),
       dependent = "outcome",
       unit.variable = "unit_id",
       time.variable = "year",
@@ -1097,8 +827,8 @@ if (!is.null(config$in_time_placebo_year) &&
   tryCatch({
     time_placebo_dataprep <- dataprep(
       foo = as.data.frame(panel_data),
-      predictors = predictors_list,
-      predictors.op = "mean",
+      predictors = names(predictors_ops),
+      predictors.op = unlist(predictors_ops),
       dependent = "outcome",
       unit.variable = "unit_id",
       time.variable = "year",
