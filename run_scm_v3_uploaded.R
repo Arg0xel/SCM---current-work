@@ -47,7 +47,7 @@ if (interactive()) {
   warning(
     paste("\n\n*** WARNING: You are running this script interactively! ***\n",
           "This script is designed to be run from command line with:\n",
-          "  Rscript run_scm_v2.R\n",
+          "  Rscript run_scm_v3.R\n",
           "\nInteractive execution may cause issues with:\n",
           "  - WDI data download (may hang or timeout)\n",
           "  - Package installation prompts\n",
@@ -68,14 +68,15 @@ config <- list(
   # Core parameters
   treatment_country_iso3 = "CHN",
   treatment_year = 1980,
-  pre_period = c(1960, 1979),
+  pre_period = c(1968, 1979),  # Start 1968 to avoid Great Famine rebound artifacts
   post_period_end = 2015,
   outcome_wdi_code = "SP.DYN.TFRT.IN",
   predictors_wdi_codes = c("NY.GDP.PCAP.KD", "SP.DYN.LE00.IN", "SP.URB.TOTL.IN.ZS"),
-  special_predictor_years = c(1965, 1970, 1975, 1979),
+  special_predictor_years = c(1968, 1971, 1974, 1977),  # Multi-year windows defined below
   
   # Coverage and interpolation - OPTIMIZED FOR ROBUST DONOR POOL
-  min_pre_coverage = 0.7,  # Unified coverage threshold (relaxed from 0.8)
+  min_outcome_coverage = 0.8,  # Strict coverage for outcome (TFR) - must be high quality
+  min_predictor_coverage = 0.7,  # Relaxed coverage for predictors (GDP, Life Expectancy, Urbanization)
   min_predictors_ok = 1,  # Require only 1 of 3 predictors (strict on outcome, flexible on predictors)
   interpolate_small_gaps = TRUE,
   max_gap_to_interpolate = 5,  # Increased from 3 to fill more gaps
@@ -112,10 +113,10 @@ config <- list(
   output_dir = "scm_results_v3"  # 3: V3 output directory
 )
 
-# Microstates to potentially exclude
-microstates <- c("LIE", "MCO", "SMR", "AND", "VAT", "NAU", "TUV", "PLW", 
+# Microstates to potentially exclude (corrected: NRU not NAU, removed MUS)
+microstates <- c("LIE", "MCO", "SMR", "AND", "VAT", "NRU", "TUV", "PLW", 
                  "MHL", "KNA", "DMA", "VCT", "GRD", "ATG", "BRB", "TON",
-                 "KIR", "FSM", "SYC", "MUS", "BHR", "MLT", "MDV")
+                 "KIR", "FSM", "SYC", "BHR", "MLT", "MDV")
 
 # ==============================================================================
 # SECTION 3.2: PACKAGE INSTALLATION AND LOADING (V2 Enhanced)
@@ -179,8 +180,8 @@ if (length(args) > 0) {
                         "placebo_max_n", "min_donor_pool_size", "min_predictors_ok",
                         "loo_top_n_donors")) {
             config[[key]] <- as.integer(value)
-          } else if (key %in% c("min_pre_coverage", "placebo_prefit_filter_value",
-                                "donor_shock_threshold")) {
+          } else if (key %in% c("min_outcome_coverage", "min_predictor_coverage", 
+                                "placebo_prefit_filter_value", "donor_shock_threshold")) {
             config[[key]] <- as.numeric(value)
           } else if (key %in% c("interpolate_small_gaps", "remove_microstates_by_name",
                                "end_year_exclude_2015_policy_change", "run_sensitivity_analysis",
@@ -261,7 +262,8 @@ cat(sprintf("Post-period end: %d\n", config$post_period_end))
 cat(sprintf("Outcome: %s\n", config$outcome_wdi_code))
 cat(sprintf("Predictors: %s\n", paste(config$predictors_wdi_codes, collapse = ", ")))
 cat(sprintf("Special predictor years: %s\n", paste(config$special_predictor_years, collapse = ", ")))
-cat(sprintf("Min coverage: %.0f%%\n", config$min_pre_coverage * 100))
+cat(sprintf("Min outcome coverage: %.0f%% | Min predictor coverage: %.0f%%\n", 
+            config$min_outcome_coverage * 100, config$min_predictor_coverage * 100))
 cat(sprintf("Min predictors required: %d of %d\n", config$min_predictors_ok, 
             length(config$predictors_wdi_codes)))
 cat(sprintf("Min donor pool size: %d\n", config$min_donor_pool_size))
@@ -371,13 +373,13 @@ china_coverage <- mean(!is.na(china_data$outcome))
 cat(sprintf("China outcome coverage in pre-period: %.1f%%\n", 
             china_coverage * 100))
 
-if (china_coverage < config$min_pre_coverage) {
+if (china_coverage < config$min_outcome_coverage) {
   stop(sprintf(
     paste("China has insufficient outcome coverage (%.1f%% < %.1f%% required).",
-          "Try: (1) reducing min_pre_coverage, (2) enabling interpolation,",
-          "(3) shortening pre-period (e.g., 1965-1979), or",
+          "Try: (1) reducing min_outcome_coverage, (2) enabling interpolation,",
+          "(3) shortening pre-period (e.g., 1970-1979), or",
           "(4) increasing max_gap_to_interpolate."),
-    china_coverage * 100, config$min_pre_coverage * 100
+    china_coverage * 100, config$min_outcome_coverage * 100
   ))
 }
 
@@ -542,62 +544,34 @@ if (length(config$donor_include_income_groups) > 0) {
   log_both(sprintf("\n"))
 }
 
-# 6. Check minimum coverage for donor pool - ENHANCED VERSION
-# Calculate coverage for outcome and ALL predictors
+# 6. Check minimum coverage for donor pool - DYNAMIC VERSION (works with any # predictors)
+# Calculate coverage for outcome and ALL predictors dynamically
+pred_cols <- paste0("predictor_", seq_along(config$predictors_wdi_codes))
+
 donor_coverage_full <- wdi_data %>%
   filter(iso3c %in% donor_pool,
          year >= config$pre_period[1],
          year <= config$pre_period[2]) %>%
   group_by(iso3c) %>%
-  summarize(
+  summarise(
     outcome_coverage = mean(!is.na(outcome)),
-    predictor_1_coverage = mean(!is.na(predictor_1)),
-    predictor_2_coverage = mean(!is.na(predictor_2)),
-    predictor_3_coverage = mean(!is.na(predictor_3)),
+    across(all_of(pred_cols), ~mean(!is.na(.)), .names = "cov_{.col}"),
     .groups = "drop"
-  )
-
-# Join with metadata for logging
-donor_coverage_full <- donor_coverage_full %>%
+  ) %>%
   left_join(donor_meta, by = "iso3c")
 
-# 2: ENHANCED FILTER - Use configurable min_predictors_ok
+# 2: ENHANCED FILTER - Dynamic for any number of predictors
 donor_coverage <- donor_coverage_full %>%
+  rowwise() %>%
   mutate(
-    n_predictors_ok = (predictor_1_coverage >= config$min_pre_coverage) +
-                     (predictor_2_coverage >= config$min_pre_coverage) +
-                     (predictor_3_coverage >= config$min_pre_coverage)
+    n_predictors_ok = sum(c_across(starts_with("cov_predictor_")) >= config$min_predictor_coverage),
+    all_predictors_have_any_data = all(c_across(starts_with("cov_predictor_")) > 0)
   ) %>%
+  ungroup() %>%
   filter(
-    outcome_coverage >= config$min_pre_coverage,
-    n_predictors_ok >= config$min_predictors_ok  # 2: Use parameter instead of hardcoded 2
-  )
-
-# ADDITIONAL CHECK: Ensure that ALL predictors used in the model have at least SOME data
-# This prevents dataprep failures due to completely missing predictors
-donor_coverage <- donor_coverage %>%
-  mutate(
-    # Check if predictors have any data at all (not completely missing)
-    predictor_1_has_any_data = predictor_1_coverage > 0,
-    predictor_2_has_any_data = predictor_2_coverage > 0, 
-    predictor_3_has_any_data = predictor_3_coverage > 0
-  ) %>%
-  filter(
-    # For predictors that are required by min_predictors_ok, ensure they have at least some data
-    # This prevents "missing data for all periods" errors in dataprep
-    (predictor_1_coverage >= config$min_pre_coverage | !predictor_1_has_any_data) &
-    (predictor_2_coverage >= config$min_pre_coverage | !predictor_2_has_any_data) &
-    (predictor_3_coverage >= config$min_pre_coverage | !predictor_3_has_any_data)
-  )
-
-# CRITICAL FIX: Additional check to ensure that countries with completely missing data 
-# for ANY predictor in the pre-period are excluded
-# This is necessary because dataprep() requires at least some data for all predictors
-donor_coverage <- donor_coverage %>%
-  filter(
-    predictor_1_has_any_data,
-    predictor_2_has_any_data,
-    predictor_3_has_any_data
+    outcome_coverage >= config$min_outcome_coverage,
+    n_predictors_ok >= config$min_predictors_ok,
+    all_predictors_have_any_data  # Prevents dataprep crashes from completely missing predictors
   )
 
 # Remove artificial donor pool limit to allow larger, more methodologically sound pool
@@ -619,46 +593,45 @@ log_both(sprintf("STEP 6: DATA COVERAGE FILTER (Pre-period %d-%d)\n",
 log_both(sprintf("  Count before: %d\n", before_coverage))
 log_both(sprintf("  Count after: %d\n", length(donor_pool)))
 log_both(sprintf("  Removed: %d\n", before_coverage - length(donor_pool)))
-log_both(sprintf("  Outcome coverage requirement: >= %.0f%%\n", config$min_pre_coverage * 100))
+log_both(sprintf("  Outcome coverage requirement: >= %.0f%%\n", config$min_outcome_coverage * 100))
 log_both(sprintf("  Predictor requirement: At least %d of %d predictors with >= %.0f%% coverage\n",
                 config$min_predictors_ok, length(config$predictors_wdi_codes),
-                config$min_pre_coverage * 100))
+                config$min_predictor_coverage * 100))
 log_both(sprintf("  Remaining examples: %s\n", paste(head(sort(donor_pool), 10), collapse = ", ")))
 log_both(sprintf("\n"))
 
 if (nrow(removed_donors) > 0) {
-  log_both(sprintf("Detailed Coverage Report for Removed Donors:\n"), console = FALSE, file_only = TRUE)
-  log_both(sprintf("%-8s %-30s %-10s %-10s %-10s %-10s %-10s\n",
-                  "ISO3", "Country", "Outcome", "Pred1", "Pred2", "Pred3", "N_OK"), 
-          console = FALSE, file_only = TRUE)
-  log_both(sprintf("%s\n", paste(rep("-", 100), collapse = "")), console = FALSE, file_only = TRUE)
-  
+  # Compute removal reasons dynamically
   removed_summary <- removed_donors %>%
+    rowwise() %>%
     mutate(
-      n_pred_ok = (predictor_1_coverage >= config$min_pre_coverage) +
-                 (predictor_2_coverage >= config$min_pre_coverage) +
-                 (predictor_3_coverage >= config$min_pre_coverage),
+      n_pred_ok = sum(c_across(starts_with("cov_predictor_")) >= config$min_predictor_coverage),
       reason = case_when(
-        outcome_coverage < config$min_pre_coverage ~ "Outcome",
-        n_pred_ok < config$min_predictors_ok ~ sprintf("Predictors (%d/%d)", n_pred_ok, 
-                                                        length(config$predictors_wdi_codes)),
+        outcome_coverage < config$min_outcome_coverage ~ "Outcome insufficient",
+        !all(c_across(starts_with("cov_predictor_")) > 0) ~ "Predictor missing all data",
+        n_pred_ok < config$min_predictors_ok ~ sprintf("Predictors (%d/%d meet threshold)", 
+                                                        n_pred_ok, length(config$predictors_wdi_codes)),
         TRUE ~ "Unknown"
       )
     ) %>%
-    arrange(desc(outcome_coverage), desc(n_pred_ok))
+    ungroup() %>%
+    arrange(desc(outcome_coverage))
+  
+  log_both(sprintf("Detailed Coverage Report for Removed Donors:\n"), console = FALSE, file_only = TRUE)
+  log_both(sprintf("%-8s %-30s %-12s %-8s %-40s\n",
+                  "ISO3", "Country", "Outcome", "PredOK", "Reason"), 
+          console = FALSE, file_only = TRUE)
+  log_both(sprintf("%s\n", paste(rep("-", 100), collapse = "")), console = FALSE, file_only = TRUE)
   
   for (i in 1:min(30, nrow(removed_summary))) {
     row <- removed_summary[i, ]
-    log_both(sprintf("%-8s %-30s %6.1f%% %9.1f%% %9.1f%% %9.1f%% %4d/%d [%s]\n",
+    log_both(sprintf("%-8s %-30s %10.1f%% %6d/%d  %-40s\n",
                     row$iso3c,
                     substr(row$country, 1, 30),
                     row$outcome_coverage * 100,
-                    row$predictor_1_coverage * 100,
-                    row$predictor_2_coverage * 100,
-                    row$predictor_3_coverage * 100,
                     row$n_pred_ok,
                     length(config$predictors_wdi_codes),
-                    row$reason),
+                    substr(row$reason, 1, 40)),
             console = FALSE, file_only = TRUE)
   }
   
@@ -668,22 +641,19 @@ if (nrow(removed_donors) > 0) {
   }
   log_both(sprintf("\n"), console = FALSE, file_only = TRUE)
   
-  # Also print abbreviated version to console
-  cat("\nDonors removed due to insufficient coverage:\n")
-  removed_console <- removed_summary %>%
-    select(iso3c, country, reason, outcome_coverage, 
-           predictor_1_coverage, predictor_2_coverage, predictor_3_coverage)
-  print(head(removed_console, 20))
-  cat(sprintf("... and %d more (see donor_filter_log.txt for full details)\n", 
-              max(0, nrow(removed_console) - 20)))
+  # Console summary
+  cat(sprintf("\nRemoved %d donors due to insufficient coverage (see donor_filter_log.txt)\n", 
+              nrow(removed_summary)))
+  cat(sprintf("  - Outcome insufficient: %d\n", sum(removed_summary$reason == "Outcome insufficient")))
+  cat(sprintf("  - Predictor issues: %d\n", nrow(removed_summary) - sum(removed_summary$reason == "Outcome insufficient")))
 }
 
 cat(sprintf("\nAfter coverage filter: %d countries (-%d removed)\n",
             length(donor_pool), before_coverage - length(donor_pool)))
-cat(sprintf("  Outcome coverage requirement: %.0f%%\n", config$min_pre_coverage * 100))
-cat(sprintf("  Predictor requirement: At least %d of %d predictors with %.0f%% coverage\n",
+cat(sprintf("  Outcome coverage requirement: %.0f%%\n", config$min_outcome_coverage * 100))
+cat(sprintf("  Predictor requirement: At least %d of %d predictors with >= %.0f%% coverage\n",
             config$min_predictors_ok, length(config$predictors_wdi_codes),
-            config$min_pre_coverage * 100))
+            config$min_predictor_coverage * 100))
 
 # 2: ENHANCED - Strict minimum donor pool enforcement
 if (length(donor_pool) < config$min_donor_pool_size) {
@@ -702,20 +672,21 @@ if (length(donor_pool) < config$min_donor_pool_size) {
           "  counterfactual. With only %d donors, the analysis is methodologically",
           "  unsound and results cannot be trusted.",
           "\nRemediation Steps (try in order):",
-          "\n1. REDUCE coverage threshold (current: %.0f%%):",
-          "   Rscript run_scm_v2.R --min_pre_coverage=0.7",
-          "   Rscript run_scm_v2.R --min_pre_coverage=0.6",
+          "\n1. REDUCE coverage thresholds (current: outcome=%.0f%%, predictors=%.0f%%):",
+          "   Rscript run_scm_v3.R --min_outcome_coverage=0.7 --min_predictor_coverage=0.6",
+          "   Rscript run_scm_v3.R --min_outcome_coverage=0.75 --min_predictor_coverage=0.5",
           "\n2. REDUCE minimum predictors (current: %d of %d):",
-          "   Rscript run_scm_v2.R --min_predictors_ok=1",
-          "\n3. ENABLE interpolation (current: %s):",
-          "   Rscript run_scm_v2.R --interpolate_small_gaps=TRUE --max_gap_to_interpolate=5",
+          "   Rscript run_scm_v3.R --min_predictors_ok=1",
+          "   Rscript run_scm_v3.R --min_predictors_ok=0  # Very aggressive",
+          "\n3. INCREASE interpolation (current: %s, max_gap=%d):",
+          "   Rscript run_scm_v3.R --max_gap_to_interpolate=7",
           "\n4. SHORTEN pre-period (current: %d-%d):",
-          "   Rscript run_scm_v2.R --pre_period=1970,1979",
+          "   Rscript run_scm_v3.R --pre_period=1970,1979",
           "   # Rationale: WDI coverage much better in 1970s than 1960s",
           "\n5. COMBINE multiple adjustments:",
-          "   Rscript run_scm_v2.R --min_pre_coverage=0.7 --min_predictors_ok=1",
+          "   Rscript run_scm_v3.R --min_outcome_coverage=0.7 --min_predictor_coverage=0.6 --min_predictors_ok=1",
           "\n6. REDUCE minimum donor requirement (last resort):",
-          "   Rscript run_scm_v2.R --min_donor_pool_size=5",
+          "   Rscript run_scm_v3.R --min_donor_pool_size=5",
           "   # WARNING: Results with < 10 donors are methodologically questionable",
           "\nDiagnostic Information:",
           "  See %s for details on why countries were removed.",
@@ -729,10 +700,12 @@ if (length(donor_pool) < config$min_donor_pool_size) {
     length(donor_pool),
     config$min_donor_pool_size,
     length(donor_pool),
-    config$min_pre_coverage * 100,
+    config$min_outcome_coverage * 100,
+    config$min_predictor_coverage * 100,
     config$min_predictors_ok,
     length(config$predictors_wdi_codes),
     ifelse(config$interpolate_small_gaps, "enabled", "disabled"),
+    config$max_gap_to_interpolate,
     config$pre_period[1], config$pre_period[2],
     log_file
   ))
@@ -829,15 +802,14 @@ for (i in seq_along(config$predictors_wdi_codes)) {
 }
 
 
-# Special predictors (outcome at specific years)
-special_predictors <- list()
-for (year in config$special_predictor_years) {
-  if (year >= config$pre_period[1] && year <= config$pre_period[2]) {
-    special_predictors[[length(special_predictors) + 1]] <- list(
-      "outcome", year, "outcome"
-    )
-  }
-}
+# Special predictors (outcome at specific year windows - more robust than single years)
+# Using 3-year windows centered on key years to capture trajectory without overfitting
+special_predictors <- list(
+  list("outcome", 1968:1970, "mean"),  # Early pre-period (post-famine recovery)
+  list("outcome", 1971:1973, "mean"),  # Mid pre-period
+  list("outcome", 1974:1976, "mean"),  # Later pre-period
+  list("outcome", 1977:1979, "mean")   # Just before treatment (critical matching period)
+)
 
 cat(sprintf("Using %d averaged predictors and %d special predictors (TFR at specific years)\n",
             length(predictors_list), length(special_predictors)))
@@ -1032,10 +1004,12 @@ cat(sprintf("Average post-treatment gap (%d-%d): %.4f\n",
 cat(sprintf("Interpretation: China's TFR was on average %.4f %s than synthetic control post-1980.\n\n",
             abs(avg_post_gap), ifelse(avg_post_gap < 0, "lower", "higher")))
 
-# Extract and print donor weights
+# Extract and print donor weights - using ACTUAL control units from dataprep
+# (dataprep may have silently dropped some donors due to NA values)
+actual_control_units <- as.integer(colnames(dataprep_out$Y0plot))
 weights_df <- data.frame(
-  unit_id = control_unit_ids,
-  weight = as.vector(synth_out$solution.w)
+  unit_id = actual_control_units,
+  weight = as.numeric(synth_out$solution.w)
 ) %>%
   left_join(unit_map, by = "unit_id") %>%
   left_join(donor_meta, by = "iso3c") %>%
@@ -1132,40 +1106,61 @@ cat(sprintf("Successfully completed %d placebos (out of %d attempted)\n",
 # Convert to data frame
 placebo_df <- bind_rows(placebo_results)
 
-# Apply pre-fit filter
-if (config$placebo_prefit_filter == "quantile") {
-  threshold <- quantile(placebo_df$pre_rmspe, config$placebo_prefit_filter_value, 
-                        na.rm = TRUE)
-  placebo_df_filtered <- placebo_df %>% filter(pre_rmspe <= threshold)
-  cat(sprintf("Pre-fit filter (quantile %.2f): removed %d placebos with pre-RMSPE > %.4f\n",
-              config$placebo_prefit_filter_value,
-              nrow(placebo_df) - nrow(placebo_df_filtered),
-              threshold))
-} else if (config$placebo_prefit_filter == "relative") {
-  threshold <- pre_rmspe * config$placebo_prefit_filter_value
-  placebo_df_filtered <- placebo_df %>% filter(pre_rmspe <= threshold)
-  cat(sprintf("Pre-fit filter (relative %.2f): removed %d placebos with pre-RMSPE > %.4f\n",
-              config$placebo_prefit_filter_value,
-              nrow(placebo_df) - nrow(placebo_df_filtered),
-              threshold))
-} else {
+# Guard against empty placebo results
+if (nrow(placebo_df) == 0) {
+  warning("No successful placebo fits; skipping placebo filtering and p-value calculation.")
   placebo_df_filtered <- placebo_df
-  cat("No pre-fit filter applied\n")
+  placebo_p_value <- NA_real_
+  cat("\nWARNING: No placebos succeeded; p-value cannot be computed.\n")
+} else {
+  # Apply pre-fit filter
+  if (config$placebo_prefit_filter == "quantile") {
+    threshold <- quantile(placebo_df$pre_rmspe, config$placebo_prefit_filter_value, 
+                          na.rm = TRUE)
+    placebo_df_filtered <- placebo_df %>% filter(pre_rmspe <= threshold)
+    cat(sprintf("Pre-fit filter (quantile %.2f): removed %d placebos with pre-RMSPE > %.4f\n",
+                config$placebo_prefit_filter_value,
+                nrow(placebo_df) - nrow(placebo_df_filtered),
+                threshold))
+  } else if (config$placebo_prefit_filter == "relative") {
+    threshold <- pre_rmspe * config$placebo_prefit_filter_value
+    placebo_df_filtered <- placebo_df %>% filter(pre_rmspe <= threshold)
+    cat(sprintf("Pre-fit filter (relative %.2f): removed %d placebos with pre-RMSPE > %.4f\n",
+                config$placebo_prefit_filter_value,
+                nrow(placebo_df) - nrow(placebo_df_filtered),
+                threshold))
+  } else {
+    placebo_df_filtered <- placebo_df
+    cat("No pre-fit filter applied\n")
+  }
+  
+  # Compute p-value
+  if (nrow(placebo_df_filtered) == 0) {
+    warning("All placebos filtered out; p-value cannot be computed.")
+    placebo_p_value <- NA_real_
+    cat("\nWARNING: All placebos filtered; p-value cannot be computed.\n")
+  } else {
+    placebo_p_value <- mean(placebo_df_filtered$mspe_ratio >= mspe_ratio, na.rm = TRUE)
+  }
 }
 
-# Compute p-value
-placebo_p_value <- mean(placebo_df_filtered$mspe_ratio >= mspe_ratio, na.rm = TRUE)
-
-cat(sprintf("\nPlacebo-based p-value: %.4f\n", placebo_p_value))
-cat(sprintf("Interpretation: %.1f%% of placebos have MSPE ratio >= China's ratio\n",
-            placebo_p_value * 100))
-
-if (placebo_p_value < 0.05) {
-  cat("Result: Statistically significant at 5% level (unlikely due to chance)\n")
-} else if (placebo_p_value < 0.10) {
-  cat("Result: Marginally significant at 10% level\n")
+# Display p-value only if computed
+if (!is.na(placebo_p_value)) {
+  cat(sprintf("\nPlacebo-based p-value: %.4f\n", placebo_p_value))
 } else {
-  cat("Result: Not statistically significant (could be due to chance)\n")
+  cat("\nPlacebo-based p-value: NA (insufficient placebos)\n")
+}
+if (!is.na(placebo_p_value)) {
+  cat(sprintf("Interpretation: %.1f%% of placebos have MSPE ratio >= China's ratio\n",
+              placebo_p_value * 100))
+  
+  if (placebo_p_value < 0.05) {
+    cat("Result: Statistically significant at 5% level (unlikely due to chance)\n")
+  } else if (placebo_p_value < 0.10) {
+    cat("Result: Marginally significant at 10% level\n")
+  } else {
+    cat("Result: Not statistically significant (could be due to chance)\n")
+  }
 }
 
 # ==============================================================================
@@ -1353,7 +1348,7 @@ if (!is.null(config$in_time_placebo_year) &&
       time.optimize.ssr = time_placebo_pre,
       time.plot = config$pre_period[1]:time_placebo_end,
       special.predictors = special_predictors[
-        sapply(special_predictors, function(x) x[[2]] %in% time_placebo_pre)
+        sapply(special_predictors, function(x) any(x[[2]] %in% time_placebo_pre))
       ]
     )
     
