@@ -96,16 +96,16 @@ config <- list(
   placebo_prefit_filter_value = 0.9,
   in_time_placebo_year = 1970,
   
-  # 2: NEW - Sensitivity analysis automation
-  run_sensitivity_analysis = TRUE,
+  # 2: NEW - Sensitivity analysis automation (NOT IMPLEMENTED in V3)
+  run_sensitivity_analysis = FALSE,
   sensitivity_coverage_thresholds = c(0.7, 0.75, 0.8, 0.85),
   
-  # 2: NEW - Leave-one-out diagnostics
-  run_leave_one_out = TRUE,
+  # 2: NEW - Leave-one-out diagnostics (NOT IMPLEMENTED in V3)
+  run_leave_one_out = FALSE,
   loo_top_n_donors = 5,  # Test influence of top 5 donors
   
-  # 2: NEW - Post-treatment validation
-  check_donor_shocks = TRUE,
+  # 2: NEW - Post-treatment validation (NOT IMPLEMENTED in V3)
+  check_donor_shocks = FALSE,
   donor_shock_threshold = 2.0,  # Flag if donor's outcome changes >2 SD
   
   # Output
@@ -186,7 +186,7 @@ if (length(args) > 0) {
           # Parse value based on type
           if (key %in% c("treatment_year", "post_period_end", "in_time_placebo_year",
                         "placebo_max_n", "min_donor_pool_size", "min_predictors_ok",
-                        "loo_top_n_donors")) {
+                        "loo_top_n_donors", "max_gap_to_interpolate")) {
             config[[key]] <- as.integer(value)
           } else if (key %in% c("min_outcome_coverage", "min_predictor_coverage", 
                                 "placebo_prefit_filter_value", "donor_shock_threshold")) {
@@ -685,7 +685,6 @@ if (length(donor_pool) < config$min_donor_pool_size) {
           "   Rscript run_scm_v3.R --min_outcome_coverage=0.75 --min_predictor_coverage=0.5",
           "\n2. REDUCE minimum predictors (current: %d of %d):",
           "   Rscript run_scm_v3.R --min_predictors_ok=1",
-          "   Rscript run_scm_v3.R --min_predictors_ok=0  # Very aggressive",
           "\n3. INCREASE interpolation (current: %s, max_gap=%d):",
           "   Rscript run_scm_v3.R --max_gap_to_interpolate=7",
           "\n4. SHORTEN pre-period (current: %d-%d):",
@@ -812,12 +811,17 @@ for (i in seq_along(config$predictors_wdi_codes)) {
 
 # Special predictors (outcome at specific year windows - more robust than single years)
 # Using 3-year windows centered on key years to capture trajectory without overfitting
-special_predictors <- list(
-  list("outcome", 1968:1970, "mean"),  # Early pre-period (post-famine recovery)
-  list("outcome", 1971:1973, "mean"),  # Mid pre-period
-  list("outcome", 1974:1976, "mean"),  # Later pre-period
-  list("outcome", 1977:1979, "mean")   # Just before treatment (critical matching period)
-)
+# Build dynamically from config$special_predictor_years, intersecting with pre_period
+sp_years <- sort(unique(config$special_predictor_years))
+special_predictors <- lapply(sp_years, function(y) {
+  yrs <- intersect(config$pre_period[1]:config$pre_period[2], (y - 1):(y + 1))
+  if (length(yrs) == 0) return(NULL)
+  list("outcome", yrs, "mean")
+})
+special_predictors <- Filter(Negate(is.null), special_predictors)
+if (length(special_predictors) == 0) {
+  stop("No valid special predictors after intersecting with pre-period; adjust special_predictor_years or pre_period.")
+}
 
 cat(sprintf("Using %d averaged predictors and %d special predictors (TFR at specific years)\n",
             length(predictors_list), length(special_predictors)))
@@ -865,7 +869,7 @@ if (length(dropped_units) > 0) {
     paste("IMPORTANT: dataprep silently dropped %d donors due to missing data!",
           "Dropped: %s",
           "This suggests coverage filter was not strict enough.",
-          "Consider: (1) increasing min_pre_coverage, (2) disabling interpolation,",
+          "Consider: (1) increasing min_outcome_coverage and/or min_predictor_coverage, (2) disabling interpolation,",
           "or (3) inspecting specific countries for data gaps."),
     length(dropped_units),
     paste(sprintf("%s (%s)", dropped_countries, dropped_iso3), collapse = ", ")
@@ -1199,12 +1203,24 @@ write_csv(weights_export, weights_file)
 cat(sprintf("Saved donor weights to %s\n", weights_file))
 
 # 2. Save placebo results
-placebo_export <- placebo_df %>%
-  select(country, iso3c, region, income, pre_rmspe, post_rmspe, mspe_ratio) %>%
-  arrange(desc(mspe_ratio))
-
 placebo_file <- file.path(config$output_dir, "placebo_results.csv")
-write_csv(placebo_export, placebo_file)
+if (nrow(placebo_df) > 0) {
+  placebo_export <- placebo_df %>%
+    select(country, iso3c, region, income, pre_rmspe, post_rmspe, mspe_ratio) %>%
+    arrange(desc(mspe_ratio))
+  write_csv(placebo_export, placebo_file)
+} else {
+  placebo_export <- tibble::tibble(
+    country = character(),
+    iso3c = character(),
+    region = character(),
+    income = character(),
+    pre_rmspe = double(),
+    post_rmspe = double(),
+    mspe_ratio = double()
+  )
+  write_csv(placebo_export, placebo_file)
+}
 cat(sprintf("Saved placebo results to %s\n", placebo_file))
 
 # 3. Save summary statistics
@@ -1249,11 +1265,11 @@ plot_df <- data.frame(
 
 # Plot 1: TFR Path (China vs Synthetic)
 p1 <- ggplot(plot_df, aes(x = Year)) +
-  geom_line(aes(y = China, color = "China"), linewidth = 1) +
-  geom_line(aes(y = Synthetic, color = "Synthetic China"), linewidth = 1, 
+  geom_line(aes(y = China, color = "China"), size = 1) +
+  geom_line(aes(y = Synthetic, color = "Synthetic China"), size = 1, 
             linetype = "dashed") +
   geom_vline(xintercept = config$treatment_year, linetype = "dotted", 
-             color = "red", linewidth = 0.8) +
+             color = "red", size = 0.8) +
   scale_color_manual(
     name = NULL,
     values = c("China" = "#1f77b4", "Synthetic China" = "#ff7f0e")
@@ -1278,10 +1294,10 @@ cat(sprintf("Saved TFR path plot to %s\n", path_file))
 
 # Plot 2: Gap (China - Synthetic)
 p2 <- ggplot(plot_df, aes(x = Year, y = Gap)) +
-  geom_line(linewidth = 1, color = "#2ca02c") +
-  geom_hline(yintercept = 0, linetype = "solid", color = "gray50", linewidth = 0.5) +
+  geom_line(size = 1, color = "#2ca02c") +
+  geom_hline(yintercept = 0, linetype = "solid", color = "gray50", size = 0.5) +
   geom_vline(xintercept = config$treatment_year, linetype = "dotted", 
-             color = "red", linewidth = 0.8) +
+             color = "red", size = 0.8) +
   labs(
     title = "Gap in Total Fertility Rate: China minus Synthetic Control",
     subtitle = sprintf("Treatment effect of One-Child Policy (introduced %d)", 
@@ -1301,31 +1317,35 @@ ggsave(gap_file, p2, width = 10, height = 6, dpi = 150, bg = "white")
 cat(sprintf("Saved gap plot to %s\n", gap_file))
 
 # Plot 3: Placebo MSPE Histogram
-p3 <- ggplot(placebo_df_filtered, aes(x = mspe_ratio)) +
-  geom_histogram(bins = 20, fill = "steelblue", alpha = 0.7, color = "black") +
-  geom_vline(xintercept = mspe_ratio, color = "red", linewidth = 1.5, 
-             linetype = "dashed") +
-  annotate("text", x = mspe_ratio, y = Inf, 
-           label = sprintf("China\n(ratio = %.2f)", mspe_ratio),
-           hjust = -0.1, vjust = 1.5, color = "red", fontface = "bold") +
-  labs(
-    title = "Placebo Test: Distribution of Post/Pre MSPE Ratios",
-    subtitle = sprintf("p-value = %.4f (proportion of placebos with ratio ≥ China's)",
-                      placebo_p_value),
-    x = "Post/Pre MSPE Ratio",
-    y = "Count",
-    caption = sprintf("Based on %d placebo runs; poor pre-fits filtered out",
-                     nrow(placebo_df_filtered))
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title = element_text(face = "bold", size = 14),
-    panel.grid.minor = element_blank()
-  )
-
-placebo_file <- file.path(config$output_dir, "placebo_mspe_hist.png")
-ggsave(placebo_file, p3, width = 10, height = 6, dpi = 150, bg = "white")
-cat(sprintf("Saved placebo histogram to %s\n", placebo_file))
+if (exists("placebo_df_filtered") && nrow(placebo_df_filtered) > 0) {
+  p3 <- ggplot(placebo_df_filtered, aes(x = mspe_ratio)) +
+    geom_histogram(bins = 20, fill = "steelblue", alpha = 0.7, color = "black") +
+    geom_vline(xintercept = mspe_ratio, color = "red", size = 1.5, 
+               linetype = "dashed") +
+    annotate("text", x = mspe_ratio, y = Inf, 
+             label = sprintf("China\n(ratio = %.2f)", mspe_ratio),
+             hjust = -0.1, vjust = 1.5, color = "red", fontface = "bold") +
+    labs(
+      title = "Placebo Test: Distribution of Post/Pre MSPE Ratios",
+      subtitle = sprintf("p-value = %.4f (proportion of placebos with ratio ≥ China's)",
+                        placebo_p_value),
+      x = "Post/Pre MSPE Ratio",
+      y = "Count",
+      caption = sprintf("Based on %d placebo runs; poor pre-fits filtered out",
+                       nrow(placebo_df_filtered))
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", size = 14),
+      panel.grid.minor = element_blank()
+    )
+  
+  placebo_file <- file.path(config$output_dir, "placebo_mspe_hist.png")
+  ggsave(placebo_file, p3, width = 10, height = 6, dpi = 150, bg = "white")
+  cat(sprintf("Saved placebo histogram to %s\n", placebo_file))
+} else {
+  cat("Skipping placebo histogram (no successful placebos after filtering)\n")
+}
 
 # ==============================================================================
 # SECTION 3.14: IN-TIME PLACEBO (OPTIONAL)
@@ -1343,7 +1363,10 @@ if (!is.null(config$in_time_placebo_year) &&
   time_placebo_pre <- config$pre_period[1]:(config$in_time_placebo_year - 1)
   time_placebo_post <- config$in_time_placebo_year:time_placebo_end
   
-  tryCatch({
+  if (length(time_placebo_pre) == 0) {
+    cat("In-time placebo skipped: empty pre-period window.\n")
+  } else {
+    tryCatch({
     time_placebo_dataprep <- dataprep(
       foo = as.data.frame(panel_data),
       predictors = predictors_list,
@@ -1372,11 +1395,11 @@ if (!is.null(config$in_time_placebo_year) &&
     )
     
     p4 <- ggplot(time_placebo_df, aes(x = Year, y = Gap)) +
-      geom_line(linewidth = 1, color = "#9467bd") +
+      geom_line(size = 1, color = "#9467bd") +
       geom_hline(yintercept = 0, linetype = "solid", color = "gray50", 
-                 linewidth = 0.5) +
+                 size = 0.5) +
       geom_vline(xintercept = config$in_time_placebo_year, linetype = "dotted", 
-                 color = "red", linewidth = 0.8) +
+                 color = "red", size = 0.8) +
       labs(
         title = "In-Time Placebo Test: Gap Before True Treatment",
         subtitle = sprintf("Fake treatment at %d (true treatment at %d)", 
@@ -1396,9 +1419,10 @@ if (!is.null(config$in_time_placebo_year) &&
     ggsave(time_placebo_file, p4, width = 10, height = 6, dpi = 150, bg = "white")
     cat(sprintf("Saved in-time placebo plot to %s\n", time_placebo_file))
     
-  }, error = function(e) {
-    cat(sprintf("In-time placebo failed: %s\n", e$message))
-  })
+    }, error = function(e) {
+      cat(sprintf("In-time placebo failed: %s\n", e$message))
+    })
+  }
 }
 
 # ==============================================================================
