@@ -74,11 +74,11 @@ config <- list(
   predictors_wdi_codes = c("NY.GDP.PCAP.KD", "SP.DYN.LE00.IN", "SP.URB.TOTL.IN.ZS"),
   special_predictor_years = c(1965, 1970, 1975, 1979),
   
-  # Coverage and interpolation
-  min_pre_coverage = 0.8,
-  min_predictors_ok = 2,  # 2: NEW - explicit "2 of 3" parameter
+  # Coverage and interpolation - RELAXED FOR LARGER DONOR POOL
+  min_pre_coverage = 0.7,  # Relaxed from 0.8 to get more donors
+  min_predictors_ok = 1,  # Require only 1 of 3 predictors (strict on outcome, flexible on predictors)
   interpolate_small_gaps = TRUE,
-  max_gap_to_interpolate = 3,
+  max_gap_to_interpolate = 5,  # Increased from 3 to fill more gaps
   
   # Donor pool filters
   donor_include_iso3 = c(),
@@ -894,6 +894,32 @@ tryCatch({
 
 # Get synthetic control results
 synth_tables <- synth.tab(dataprep.res = dataprep_out, synth.res = synth_out)
+
+# DIAGNOSTIC: Check weight distribution
+all_weights <- data.frame(
+  unit_id = control_unit_ids,
+  weight = as.vector(synth_out$solution.w)
+) %>%
+  left_join(unit_map, by = "unit_id") %>%
+  arrange(desc(weight))
+
+n_nonzero_weights <- sum(all_weights$weight > 1e-6)
+cat(sprintf("\nDIAGNOSTIC: Weight distribution among %d available donors:\n", 
+            length(control_unit_ids)))
+cat(sprintf("  - Donors with weight > 0.000001: %d\n", n_nonzero_weights))
+cat(sprintf("  - Donors with weight > 0.001: %d\n", sum(all_weights$weight > 0.001)))
+cat(sprintf("  - Donors with weight > 0.01: %d\n", sum(all_weights$weight > 0.01)))
+cat(sprintf("  - Donors with weight > 0.1: %d\n", sum(all_weights$weight > 0.1)))
+
+if (n_nonzero_weights < 5) {
+  warning(sprintf(paste(
+    "WARNING: Only %d donors received non-zero weights!",
+    "This suggests:",
+    "1. Predictor data is very sparse or misaligned",
+    "2. Only a few donors match China's pre-treatment characteristics",
+    "3. May need to relax coverage requirements or adjust predictors"),
+    n_nonzero_weights))
+}
 
 # ==============================================================================
 # SECTION 3.10: EXTRACT AND REPORT RESULTS
