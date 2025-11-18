@@ -34,7 +34,7 @@
 #
 # USAGE:
 #   Rscript run_scm_v3.R                    # Standard run
-#   Rscript run_scm_v3.R --min_pre_coverage=0.7  # Custom parameters
+#   Rscript run_scm_v3.R --min_outcome_coverage=0.7 --min_predictor_coverage=0.6 --min_predictors_ok=1
 #
 ################################################################################
 
@@ -160,8 +160,16 @@ if (file.exists("config_v3.yaml")) {
       }
     }
   } else {
-    cat("yaml package not available; skipping config_v2.yaml\n")
+    cat("yaml package not available; skipping config_v3.yaml\n")
   }
+}
+
+# Helper for robust boolean parsing
+parse_bool <- function(x) {
+  x <- tolower(trimws(x))
+  if (x %in% c("true", "t", "1", "yes", "y")) return(TRUE)
+  if (x %in% c("false", "f", "0", "no", "n")) return(FALSE)
+  stop(sprintf("Invalid boolean value: %s. Use TRUE/FALSE or 1/0.", x))
 }
 
 # Override with command-line arguments
@@ -186,7 +194,7 @@ if (length(args) > 0) {
           } else if (key %in% c("interpolate_small_gaps", "remove_microstates_by_name",
                                "end_year_exclude_2015_policy_change", "run_sensitivity_analysis",
                                "run_leave_one_out", "check_donor_shocks")) {
-            config[[key]] <- as.logical(toupper(value))
+            config[[key]] <- parse_bool(value)
           } else if (key %in% c("donor_include_iso3", "donor_exclude_iso3", 
                                "donor_include_regions", "donor_include_income_groups",
                                "donor_exclude_regions", "predictors_wdi_codes")) {
@@ -748,7 +756,7 @@ log_both(sprintf("==============================================================
 close(log_conn)
 
 cat("\nDonor pool countries:\n")
-print(donor_names, n = Inf)
+print(donor_names)
 cat(sprintf("\nDonor filter log saved to: %s\n", log_file))
 
 cat(sprintf("\n✓ Donor pool construction complete: %d countries\n", length(donor_pool)))
@@ -877,7 +885,7 @@ if (length(dropped_units) > 0) {
   for (i in seq_along(dropped_iso3)) {
     cat(sprintf("  - %s (%s)\n", dropped_countries[i], dropped_iso3[i]), file = log_append)
   }
-  cat(sprintf("\nRecommendation: Increase min_pre_coverage or disable interpolation.\n"), file = log_append)
+  cat(sprintf("\nRecommendation: Increase min_outcome_coverage/min_predictor_coverage or disable interpolation.\n"), file = log_append)
   cat(sprintf("================================================================================\n\n"), file = log_append)
   close(log_append)
 }
@@ -898,8 +906,8 @@ start_time <- Sys.time()
 max_duration <- 300  # 5 minutes maximum
 
 tryCatch({
-  # Try with default settings first
-  synth_out <- synth(dataprep_out, maxiter = 1000)  # Limit iterations
+  # Default settings are usually fine (no maxiter/quadopt args)
+  synth_out <- synth(dataprep_out)
   
   elapsed_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
   if (elapsed_time > max_duration) {
@@ -908,12 +916,12 @@ tryCatch({
   
   cat(sprintf("Synthetic control fitted successfully in %.1f seconds.\n", elapsed_time))
 }, error = function(e) {
-  # If optimization fails, try with more restrictive settings
-  cat("First optimization attempt failed, trying with more restrictive settings...\n")
+  # Try again with slightly different tolerances (Synth-supported knobs)
+  cat("First optimization attempt failed, retrying with adjusted ipop margins...\n")
   
   tryCatch({
-    synth_out <- synth(dataprep_out, maxiter = 500, quadopt = "LowRank")
-    cat("Synthetic control fitted successfully with restrictive settings.\n")
+    synth_out <- synth(dataprep_out, Sigf = 4, Margin.ipop = 0.01, Bound.ipop = 0.1)
+    cat("Synthetic control fitted successfully with adjusted settings.\n")
   }, error = function(e2) {
     # If still failing, provide detailed error message
     stop(sprintf(
@@ -921,11 +929,11 @@ tryCatch({
             "Primary error: %s\n",
             "Secondary error: %s\n",
             "\nPossible solutions:\n",
-            "1. Reduce donor pool size further (current: %d donors)\n",
-            "2. Try different predictor combinations\n",
-            "3. Check for data quality issues\n",
-            "4. Consider using a different optimization method"),
-      e$message, e2$message, length(control_unit_ids)
+            "1. Try different predictor combinations\n",
+            "2. Relax coverage criteria to enlarge donor pool\n",
+            "3. Check for data gaps / interpolation issues\n",
+            "4. Consider augsynth (Augmented Synthetic Control)"),
+      e$message, e2$message
     ))
   })
 })
@@ -933,10 +941,11 @@ tryCatch({
 # Get synthetic control results
 synth_tables <- synth.tab(dataprep.res = dataprep_out, synth.res = synth_out)
 
-# DIAGNOSTIC: Check weight distribution to identify potential issues
+# DIAGNOSTIC: Check weight distribution - use ACTUAL controls from dataprep
+actual_control_units <- as.integer(colnames(dataprep_out$Y0plot))
 all_weights <- data.frame(
-  unit_id = control_unit_ids,
-  weight = as.vector(synth_out$solution.w)
+  unit_id = actual_control_units,
+  weight = as.numeric(synth_out$solution.w)
 ) %>%
   left_join(unit_map, by = "unit_id") %>%
   left_join(donor_meta, by = "iso3c") %>%
@@ -944,7 +953,7 @@ all_weights <- data.frame(
 
 n_nonzero_weights <- sum(all_weights$weight > 1e-6)
 cat(sprintf("\n>>> DIAGNOSTIC: Weight distribution among %d available donors:\n", 
-            length(control_unit_ids)))
+            length(actual_control_units)))
 cat(sprintf("  - Donors with weight > 0.000001: %d\n", n_nonzero_weights))
 cat(sprintf("  - Donors with weight > 0.001: %d\n", sum(all_weights$weight > 0.001)))
 cat(sprintf("  - Donors with weight > 0.01: %d\n", sum(all_weights$weight > 0.01)))
@@ -958,10 +967,10 @@ if (n_nonzero_weights < 5) {
     "  2. Only a few donors match China's pre-treatment characteristics well\n",
     "  3. May need to relax coverage requirements or adjust predictors\n",
     "Consider:\n",
-    "  - Reducing min_pre_coverage (current: %.1f%%)\n",
+    "  - Relaxing coverage thresholds (current: outcome=%.1f%%, predictor=%.1f%%)\n",
     "  - Using different predictor variables\n",
     "  - Shortening the pre-period to 1970-1979 (better data coverage)\n"),
-    n_nonzero_weights, config$min_pre_coverage * 100))
+    n_nonzero_weights, config$min_outcome_coverage * 100, config$min_predictor_coverage * 100))
 }
 
 # ==============================================================================
@@ -991,8 +1000,8 @@ pre_rmspe <- sqrt(mean(pre_gaps^2))
 post_rmspe <- sqrt(mean(post_gaps^2))
 mspe_ratio <- post_rmspe^2 / pre_rmspe^2
 
-cat(sprintf("Pre-treatment RMSPE (1960-%d): %.4f\n", 
-            config$treatment_year - 1, pre_rmspe))
+cat(sprintf("Pre-treatment RMSPE (%d-%d): %.4f\n", 
+            config$pre_period[1], config$treatment_year - 1, pre_rmspe))
 cat(sprintf("Post-treatment RMSPE (%d-%d): %.4f\n", 
             config$treatment_year, config$post_period_end, post_rmspe))
 cat(sprintf("Post/Pre MSPE Ratio: %.4f\n\n", mspe_ratio))
@@ -1072,7 +1081,7 @@ for (placebo_iso3 in placebo_donors) {
       special.predictors = special_predictors
     )
     
-    placebo_synth <- synth(placebo_dataprep, verbose = FALSE)
+    placebo_synth <- synth(placebo_dataprep)
     
     placebo_gaps <- placebo_dataprep$Y1plot - 
       (placebo_dataprep$Y0plot %*% placebo_synth$solution.w)
@@ -1352,7 +1361,7 @@ if (!is.null(config$in_time_placebo_year) &&
       ]
     )
     
-    time_placebo_synth <- synth(time_placebo_dataprep, verbose = FALSE)
+    time_placebo_synth <- synth(time_placebo_dataprep)
     
     time_placebo_gaps <- time_placebo_dataprep$Y1plot - 
       (time_placebo_dataprep$Y0plot %*% time_placebo_synth$solution.w)
@@ -1479,12 +1488,12 @@ INTERPRETATION
 
 REPRODUCIBILITY
 ---------------
-This analysis was generated by run_scm.R with seed 20231108.
+This analysis was generated by run_scm_v3.R with seed 20231108.
 To replicate:
-  Rscript run_scm.R
+  Rscript run_scm_v3.R
 
 To modify parameters:
-  Rscript run_scm.R --treatment_year=1981 --post_period_end=2014
+  Rscript run_scm_v3.R --treatment_year=1981 --post_period_end=2014
 
 See script comments for full configuration options.
 
